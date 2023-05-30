@@ -43,6 +43,7 @@ impl Portfolio {
     }
 
     fn likely_underlying_range(&self) -> [f32; 2] {
+        // Returns three standard deviations in either direction of the spot price
         let mut lower = 0.0;
         if self.volatility < 1.0/3.0 {
             lower = self.spot*(1.0 - 3.0*self.volatility);
@@ -56,6 +57,9 @@ impl Portfolio {
         }
         self.options.push(op);
     }
+    
+    //////////////////////////////
+    /// PLOT PRICE CHANGES
 
     fn plot_price_changes(&self, number_samples: i32) -> Result<(), Box<dyn std::error::Error>> {
         let [lower, upper] = self.likely_underlying_range();
@@ -64,12 +68,16 @@ impl Portfolio {
         let xdata: Vec<f32> = (0..number_samples).map( |i| (lower + (i as f32)*increment_size)).collect();
         let mut ydata = vec![0f32; number_samples as usize];
 
+        for i in 0..(number_samples) {
+            ydata[i as usize] += self.contracts*(lower + (i as f32)*increment_size);
+        }
+
         let r = self.interest_rate;
         let sigma = self.volatility;
         let n = Normal::new(0.0, 1.0).unwrap();
 
         for op in &self.options {
-            let t =  op.time_to_expiry;
+            let t = op.time_to_expiry;
             let k = op.strike_price;
             let q = op.quantity;
 
@@ -96,6 +104,9 @@ impl Portfolio {
         ); 
     }
 
+    ///////////////////////////
+    /// SUMMARY of portfolio
+
     fn summary(&self) {
         println!("Here is a summary of the portfolio:");
         println!("  {} contracts currently worth {}", self.contracts, self.spot);
@@ -104,21 +115,20 @@ impl Portfolio {
             let mut kind = "call".to_string();
             match op.kind {
                 OptKind::Put => kind = "put".to_string(),
-                _ => {}
+                OptKind::Call => kind = "call".to_string()
             }
             println!("  {} {} options with stike {} expiring in {} year(s)", 
             op.quantity, kind, op.strike_price, op.time_to_expiry);
         }
     }
 
-    fn greeks(&self) -> HashMap<String, f64> {
-        let x = self.spot as f64;
-        let r = self.interest_rate as f64;
-        let sigma = self.volatility as f64;
+    fn greeks(&self) -> HashMap<String, f32> {
+        let x = self.spot;
+        let r = self.interest_rate;
+        let sigma = self.volatility;
 
-        let price = self.contracts*self.spot;
-        let mut price = price as f64;
-        let mut delta = self.contracts as f64;
+        let mut price = self.contracts*self.spot;
+        let mut delta = self.contracts;
         let mut gamma = 0.0;
         let mut theta = 0.0;
         let mut vega = 0.0;
@@ -126,35 +136,35 @@ impl Portfolio {
         let n = Normal::new(0.0, 1.0).unwrap();
 
         for op in &self.options {
-            let t =  op.time_to_expiry as f64;
-            let k = op.strike_price as f64;
-            let q = op.quantity as f64;
+            let t =  op.time_to_expiry;
+            let k = op.strike_price;
+            let q = op.quantity;
 
             let dplus = ((x/k).ln() +  (r + sigma*sigma*0.5)*t )/(sigma*(t.sqrt()));
             let dminus = ((x/k).ln() +  (r - sigma*sigma*0.5)*t )/(sigma*(t.sqrt()));
 
-            gamma += q*n.pdf(dplus as f64)/(x*sigma*t.sqrt());
-            vega += q*x*n.pdf(dplus as f64)*t.sqrt();
+            gamma += q*(n.pdf(dplus as f64) as f32)/(x*sigma*t.sqrt());
+            vega += q*x*(n.pdf(dplus as f64) as f32)*t.sqrt();
 
             match op.kind {
                 OptKind::Call => {
-                    price += q*(x*n.cdf(dplus as f64) - ((-r*t).exp())*k*n.cdf(dminus as f64));
-                    delta += q*n.cdf(dplus as f64);
-                    theta += q*(-(x*sigma*n.pdf(dplus as f64))/(2.0*t.sqrt()) - r*k*((-r*t).exp())*n.cdf(dminus as f64));
-                    rho += q*t*k*((-r*t).exp())*n.cdf(dminus as f64);
+                    price += q*(x*(n.cdf(dplus as f64) as f32) - ((-r*t).exp())*k*(n.cdf(dminus as f64) as f32));
+                    delta += q*(n.cdf(dplus as f64) as f32);
+                    theta += q*(-(x*sigma*(n.pdf(dplus as f64) as f32))/(2.0*t.sqrt()) - r*k*((-r*t).exp())*(n.cdf(dminus as f64) as f32));
+                    rho += q*t*k*((-r*t).exp())*(n.cdf(dminus as f64) as f32);
                 },
                 OptKind::Put => {
-                    price += q*(-x*n.cdf(-dplus as f64) + ((-r*t).exp())*k*n.cdf(-dminus as f64));
-                    delta += q*n.cdf((dplus - 1.0 ) as f64);
-                    theta += q*(-(x*sigma*n.pdf(dplus as f64))/(2.0*t.sqrt()) + r*k*((-r*t).exp())*n.cdf(-dminus as f64));
-                    rho += -q*t*k*((-r*t).exp())*n.cdf(-dminus as f64);                
+                    price += q*(-x*(n.cdf(-dplus as f64) as f32) + ((-r*t).exp())*k*(n.cdf(-dminus as f64) as f32));
+                    delta += q*(n.cdf((dplus - 1.0 ) as f64)as f32);
+                    theta += q*(-(x*sigma*(n.pdf(dplus as f64) as f32))/(2.0*t.sqrt()) + r*k*((-r*t).exp())*(n.cdf(-dminus as f64) as f32));
+                    rho += -q*t*k*((-r*t).exp())*(n.cdf(-dminus as f64) as f32);                
                 },
             }
         }
 
         /* Theta is sometimes given in units of days, so divide by 365. */
 
-        let mut greeks: HashMap<String, f64> = HashMap::new();
+        let mut greeks: HashMap<String, f32> = HashMap::new();
         greeks.insert("price".to_string(), price);
         greeks.insert("delta".to_string(), delta);
         greeks.insert("gamma".to_string(), gamma);
@@ -163,7 +173,6 @@ impl Portfolio {
         greeks.insert("vega".to_string(), vega);
         greeks.insert("rho".to_string(), rho);
         return greeks;
-
     }
 }
 
