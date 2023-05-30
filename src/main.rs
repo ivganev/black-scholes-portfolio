@@ -1,10 +1,11 @@
 use statrs::distribution::Normal;
 use statrs::distribution::Continuous;
 use statrs::distribution::ContinuousCDF;
-use core::num;
 use std::collections::HashMap;
+use plotters::prelude::*;
 
 #[allow(dead_code)]
+
 struct Portfolio {
     /* A portfolio indicates: 
     the spot price and volatility of the underlying asset, 
@@ -56,51 +57,43 @@ impl Portfolio {
         self.options.push(op);
     }
 
-    fn price_changes(&self, number_samples: i32) -> Vec<Vec<f64>> {
+    fn plot_price_changes(&self, number_samples: i32) -> Result<(), Box<dyn std::error::Error>> {
         let [lower, upper] = self.likely_underlying_range();
         let increment_size = (upper - lower)/(number_samples as f32);
 
-        let mut v: Vec<Vec<f64>> = Vec::new();
+        let xdata: Vec<f32> = (0..number_samples).map( |i| (lower + (i as f32)*increment_size)).collect();
+        let mut ydata = vec![0f32; number_samples as usize];
 
-        for i in 0..(number_samples) {
-            v.push(vec![(lower + (i as f32)*increment_size) as f64, 0f64]);
-        }
-
-        let r = self.interest_rate as f64;
-        let sigma = self.volatility as f64;
+        let r = self.interest_rate;
+        let sigma = self.volatility;
         let n = Normal::new(0.0, 1.0).unwrap();
 
         for op in &self.options {
-            let t =  op.time_to_expiry as f64;
-            let k = op.strike_price as f64;
-            let q = op.quantity as f64;
+            let t =  op.time_to_expiry;
+            let k = op.strike_price;
+            let q = op.quantity;
 
             for i in 0..(number_samples) {
-                let x = (lower + (i as f32)*increment_size) as f64;
+                let x = lower + (i as f32)*increment_size;
                 let dplus = ((x/k).ln() +  (r + sigma*sigma*0.5)*t )/(sigma*(t.sqrt()));
                 let dminus = ((x/k).ln() +  (r - sigma*sigma*0.5)*t )/(sigma*(t.sqrt()));
                 match op.kind {
                     OptKind::Call => {
-                        v[i as usize][1] += q*(x*n.cdf(dplus as f64) - ((-r*t).exp())*k*n.cdf(dminus as f64));
+                        ydata[i as usize] += q*(x*(n.cdf(dplus as f64) as f32) - ((-r*t).exp())*k*(n.cdf(dminus as f64) as f32));
                     },
                     OptKind::Put => {
-                        v[i as usize][1] += q*(-x*n.cdf(-dplus as f64) + ((-r*t).exp())*k*n.cdf(-dminus as f64));            
+                        ydata[i as usize] += q*(-x*(n.cdf(-dplus as f64) as f32) + ((-r*t).exp())*k*(n.cdf(-dminus as f64) as f32));            
                     },
                 }
             }
         }
 
-        let mut price_range = vec![0f64, 0f64];
-        for i in 0..(number_samples) {
-            if v[i as usize][1] < price_range[0] {
-                price_range[0] = v[i as usize][1];
-            }
-            if v[i as usize][1] > price_range[1] {
-                price_range[1] = v[i as usize][1]
-            }
-        }
-
-        return v; 
+        return plot(
+            xdata,
+            ydata,
+            "Portfolio price as underlying varies".to_string(),
+            "plotters-doc-data/price.png".to_string()
+        ); 
     }
 
     fn summary(&self) {
@@ -176,44 +169,53 @@ impl Portfolio {
 
 ///////////////////////////////////////
 
+fn plot(xdata: Vec<f32>, ydata: Vec<f32>, title: String, file_path: String) -> Result<(), Box<dyn std::error::Error>> {
+
+    assert_eq!(xdata.len(), ydata.len());
+    let number_samples = xdata.len();
+
+    let mut ylower = ydata[0];
+    let mut yupper = ydata[0];
+    for i in 1..(number_samples) {
+        if ydata[i as usize] < ylower {
+            ylower = ydata[i as usize];
+        }
+        if ydata[i as usize] > yupper {
+            yupper = ydata[i as usize];
+        }
+    }
+    yupper = yupper + (yupper - ylower)*0.2;
+    ylower = ylower - (yupper - ylower)*0.2;
+
+    let root = BitMapBackend::new(&file_path, (640, 480)).into_drawing_area();
+    root.fill(&WHITE)?;
+    let mut chart = ChartBuilder::on(&root)
+        .caption(title, ("sans-serif", 30).into_font())
+        .margin(5)
+        .x_label_area_size(30)
+        .y_label_area_size(30)
+        .build_cartesian_2d(xdata[0]..xdata[number_samples-1], (ylower)..(yupper))?;
+
+    chart.configure_mesh()
+        .y_labels(10)
+        .light_line_style(&TRANSPARENT)
+        .disable_x_mesh()
+        .draw()?;
+    
+    chart
+        .draw_series(LineSeries::new((0..(number_samples)).map(|i| (xdata[i], ydata[i])), &RED))?;
+
+    root.present()?;
+    Ok(())
+}
+
+///////////////////////////////////////
+/// MAIN 
+//////////////////////////////////// 
+
 fn main() {
 
-    let mut stock1 = Portfolio {
-        spot: 90.0,
-        volatility: 0.3,
-        contracts: 4.0,
-        options: Vec::new(),
-        cash: 0.0,
-        interest_rate: 0.01,
-        time_to_expiry: 0.0,
-    };
-
-    stock1.options.push( Opt {
-        kind: OptKind::Call,
-        strike_price: 100.0,
-        time_to_expiry: 1.0,
-        quantity: 3.0,
-    });
-
-    stock1.options.push( Opt {
-        kind: OptKind::Put,
-        strike_price: 90.0,
-        time_to_expiry: 1.0,
-        quantity: -2.5
-    });
-
-    stock1.options.push( Opt {
-        kind: OptKind::Put,
-        strike_price: 90.0,
-        time_to_expiry: 1.0,
-        quantity: 1.0
-    });
-
-    println!("{}", stock1.underlying_summary());
-    println!("{:?}", stock1.greeks());
-    stock1.summary();
-
-    let mut porfolio1 = Portfolio {
+    let mut portfolio1 = Portfolio {
         spot: 99.50,
         volatility: 0.25,
         interest_rate: 0.06, 
@@ -222,12 +224,31 @@ fn main() {
         cash: 0.0,
         time_to_expiry: 0.0,
     };
-
-    porfolio1.options.push( Opt { 
+    
+    portfolio1.add_option(Opt { 
         kind: OptKind::Call, strike_price: 95.0, time_to_expiry: 91.0/365.0, quantity: -10.0 
     });
-    println!("{:?}", porfolio1.greeks());
+    portfolio1.add_option(Opt { 
+        kind: OptKind::Call, strike_price: 100.0, time_to_expiry: 1.0, quantity: 3.0 
+    });
+    portfolio1.add_option(Opt { 
+        kind: OptKind::Put, strike_price: 90.0, time_to_expiry: 1.0, quantity: -2.5 
+    });
+    portfolio1.add_option(Opt { 
+        kind: OptKind::Put, strike_price: 85.0, time_to_expiry: 0.75, quantity: 2.0 
+    });
 
+    println!("{}", portfolio1.underlying_summary());
+    println!("{:?}", portfolio1.greeks());
+    portfolio1.summary();
+    portfolio1.plot_price_changes(30);
+
+    plot(
+        (0..100).map(|x| x as f32).collect(), 
+        vec![5f32; 100], 
+        "Fun plot".to_string(), 
+        "plotters-doc-data/5.png".to_string()
+    );
 }
 
 
