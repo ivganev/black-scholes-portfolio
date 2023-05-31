@@ -6,6 +6,10 @@ use plotters::prelude::*;
 
 #[allow(dead_code)]
 
+////////////////////////////////////
+/// Structs 
+////////////////////////////////////
+
 struct Portfolio {
     /* A portfolio indicates: 
     the spot price and volatility of the underlying asset, 
@@ -37,19 +41,28 @@ struct Opt {
     quantity: f32,
 }
 
+enum Greek{
+    Price,
+    Delta,
+    Gamma, 
+    Theta,
+    Vega,
+    Rho
+}
+
+////////////////////////////////////
+/// Portfolio methods 
+////////////////////////////////////
+
 impl Portfolio {
+
+    /// Summarize the properties of the underlying
+
     fn underlying_summary(&self) -> String {
         return format!("The underlying has current price {} with volatiilty {}.", self.spot, self.volatility);
     }
 
-    fn likely_underlying_range(&self) -> [f32; 2] {
-        // Returns three standard deviations in either direction of the spot price
-        let mut lower = 0.0;
-        if self.volatility < 1.0/3.0 {
-            lower = self.spot*(1.0 - 3.0*self.volatility);
-        }
-        return [lower, self.spot*(1.0  + 3.0*self.volatility)];
-    }
+    /// Add an option to the portfolio
 
     fn add_option(&mut self, op: Opt) {
         if op.time_to_expiry > self.time_to_expiry {
@@ -57,55 +70,8 @@ impl Portfolio {
         }
         self.options.push(op);
     }
-    
-    //////////////////////////////
-    /// PLOT PRICE CHANGES
 
-    fn plot_price_changes(&self, number_samples: i32) -> Result<(), Box<dyn std::error::Error>> {
-        let [lower, upper] = self.likely_underlying_range();
-        let increment_size = (upper - lower)/(number_samples as f32);
-
-        let xdata: Vec<f32> = (0..number_samples).map( |i| (lower + (i as f32)*increment_size)).collect();
-        let mut ydata = vec![0f32; number_samples as usize];
-
-        for i in 0..(number_samples) {
-            ydata[i as usize] += self.contracts*(lower + (i as f32)*increment_size);
-        }
-
-        let r = self.interest_rate;
-        let sigma = self.volatility;
-        let n = Normal::new(0.0, 1.0).unwrap();
-
-        for op in &self.options {
-            let t = op.time_to_expiry;
-            let k = op.strike_price;
-            let q = op.quantity;
-
-            for i in 0..(number_samples) {
-                let x = lower + (i as f32)*increment_size;
-                let dplus = ((x/k).ln() +  (r + sigma*sigma*0.5)*t )/(sigma*(t.sqrt()));
-                let dminus = ((x/k).ln() +  (r - sigma*sigma*0.5)*t )/(sigma*(t.sqrt()));
-                match op.kind {
-                    OptKind::Call => {
-                        ydata[i as usize] += q*(x*(n.cdf(dplus as f64) as f32) - ((-r*t).exp())*k*(n.cdf(dminus as f64) as f32));
-                    },
-                    OptKind::Put => {
-                        ydata[i as usize] += q*(-x*(n.cdf(-dplus as f64) as f32) + ((-r*t).exp())*k*(n.cdf(-dminus as f64) as f32));            
-                    },
-                }
-            }
-        }
-
-        return plot(
-            xdata,
-            ydata,
-            "Portfolio price as underlying varies".to_string(),
-            "plotters-doc-data/price.png".to_string()
-        ); 
-    }
-
-    ///////////////////////////
-    /// SUMMARY of portfolio
+    /// Summary of portfolio
 
     fn summary(&self) {
         println!("Here is a summary of the portfolio:");
@@ -121,6 +87,8 @@ impl Portfolio {
             op.quantity, kind, op.strike_price, op.time_to_expiry);
         }
     }
+
+    /// Greeks
 
     fn greeks(&self) -> HashMap<String, f32> {
         let x = self.spot;
@@ -162,8 +130,6 @@ impl Portfolio {
             }
         }
 
-        /* Theta is sometimes given in units of days, so divide by 365. */
-
         let mut greeks: HashMap<String, f32> = HashMap::new();
         greeks.insert("price".to_string(), price);
         greeks.insert("delta".to_string(), delta);
@@ -174,11 +140,92 @@ impl Portfolio {
         greeks.insert("rho".to_string(), rho);
         return greeks;
     }
+
+    /// Find the three standard deviations range from the spot price
+
+    fn likely_underlying_range(&self) -> [f32; 2] {
+        let mut lower = 0.0;
+        if self.volatility < 1.0/3.0 {
+            lower = self.spot*(1.0 - 3.0*self.volatility);
+        }
+        return [lower, self.spot*(1.0  + 3.0*self.volatility)];
+    }
+    
+    /// Plot price changes
+    
+    fn plot_price_changes(&self, number_samples: i32) -> Result<(), Box<dyn std::error::Error>> {
+        // add gre: Greek as an argument
+        let [lower, upper] = self.likely_underlying_range();
+        let increment_size = (upper - lower)/(number_samples as f32);
+
+        let xdata: Vec<f32> = (0..number_samples).map( |i| (lower + (i as f32)*increment_size)).collect();
+        let mut ydata = vec![0f32; number_samples as usize];
+
+        for i in 0..(number_samples) {
+            ydata[i as usize] += self.contracts*(lower + (i as f32)*increment_size);
+        }
+
+        let r = self.interest_rate;
+        let sigma = self.volatility;
+        let n = Normal::new(0.0, 1.0).unwrap(); // Make this into a global variable somehow?
+
+        for op in &self.options {
+            let t = op.time_to_expiry;
+            let k = op.strike_price;
+            let q = op.quantity;
+
+            for i in 0..(number_samples) {
+                let x = lower + (i as f32)*increment_size;
+                let dplus = ((x/k).ln() +  (r + sigma*sigma*0.5)*t )/(sigma*(t.sqrt()));
+                let dminus = ((x/k).ln() +  (r - sigma*sigma*0.5)*t )/(sigma*(t.sqrt()));
+                match op.kind {
+                    OptKind::Call => {
+                        ydata[i as usize] += q*(x*(n.cdf(dplus as f64) as f32) - ((-r*t).exp())*k*(n.cdf(dminus as f64) as f32));
+                        // match gre {
+                        //      Greek::Price => {}, 
+                        //     Greek::Delta => {},
+                        //}
+                        // q*call_price(x,k,r,t, sigma)
+                        // q*call_delta(x,k, r,t, sigma)
+                        // q*call_gamma()
+                    },
+                    OptKind::Put => {
+                        ydata[i as usize] += q*(-x*(n.cdf(-dplus as f64) as f32) + ((-r*t).exp())*k*(n.cdf(-dminus as f64) as f32));            
+                    },
+                }
+            }
+        }
+
+        return plot(
+            xdata,
+            ydata,
+            "Portfolio value".to_string(), 
+            "plotters-doc-data/price.png".to_string(),
+            self.spot,
+            format!("Price of underlying (current = {})", self.spot),
+            "Portfolio theoretical value".to_string()
+        ); 
+    }
+    
+    // Plot delta versus underlying
+    // Plot gamma versus underlying
+    // Plot theta versus underlying
+    // Plot vega versus underlying
+    // Plot rho versus underlying
+    // Plot price versus time to expiration
+    // Plot delta versus time to expiration
+    // Plot gamma versus time to expiration
+    // Plot theta versus time to expiration
+    // Plot vega versus time to expiration
+    // Plot rho versus time to expiration
+
 }
 
 ///////////////////////////////////////
+/// Plot function
+///////////////////////////////////////
 
-fn plot(xdata: Vec<f32>, ydata: Vec<f32>, title: String, file_path: String) -> Result<(), Box<dyn std::error::Error>> {
+fn plot(xdata: Vec<f32>, ydata: Vec<f32>, title: String, file_path: String, current_price: f32, xlabel: String, ylabel: String) -> Result<(), Box<dyn std::error::Error>> {
 
     assert_eq!(xdata.len(), ydata.len());
     let number_samples = xdata.len();
@@ -193,26 +240,34 @@ fn plot(xdata: Vec<f32>, ydata: Vec<f32>, title: String, file_path: String) -> R
             yupper = ydata[i as usize];
         }
     }
-    yupper = yupper + (yupper - ylower)*0.2;
-    ylower = ylower - (yupper - ylower)*0.2;
+    let range = yupper - ylower;
+    yupper += range*0.2;
+    ylower -= range*0.2;
 
     let root = BitMapBackend::new(&file_path, (640, 480)).into_drawing_area();
     root.fill(&WHITE)?;
     let mut chart = ChartBuilder::on(&root)
         .caption(title, ("sans-serif", 30).into_font())
-        .margin(5)
-        .x_label_area_size(30)
-        .y_label_area_size(30)
+        .margin(10)
+        .x_label_area_size(50)
+        .y_label_area_size(60)
         .build_cartesian_2d(xdata[0]..xdata[number_samples-1], (ylower)..(yupper))?;
 
     chart.configure_mesh()
         .y_labels(10)
+        .x_labels(10)
         .light_line_style(&TRANSPARENT)
-        .disable_x_mesh()
+        .x_desc(xlabel)
+        .y_desc(ylabel)
         .draw()?;
     
     chart
-        .draw_series(LineSeries::new((0..(number_samples)).map(|i| (xdata[i], ydata[i])), &RED))?;
+        .draw_series(LineSeries::new((0..(number_samples)).map(|i| (xdata[i], ydata[i])), &BLUE))?;
+
+    chart.draw_series(LineSeries::new(
+        vec![(current_price, ylower), (current_price, yupper)],
+        &BLACK,
+    ))?;
 
     root.present()?;
     Ok(())
@@ -256,13 +311,23 @@ fn main() {
         (0..100).map(|x| x as f32).collect(), 
         vec![5f32; 100], 
         "Fun plot".to_string(), 
-        "plotters-doc-data/5.png".to_string()
+        "plotters-doc-data/5.png".to_string(),
+        50.0,
+        "fun independent variable".to_string(),
+        "fun dependent variable".to_string()
     );
 }
 
 
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////
+
+///// SCRAPS
+/// //////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////
 /// 
