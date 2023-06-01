@@ -18,12 +18,12 @@ struct Portfolio {
     the options that are part of the portfolio,
     the cash position
      */
+    name: String,
     spot: f32,
     volatility: f32,
     interest_rate: f32,
     contracts: f32,
     options: Vec<Opt>,
-    cash: f32,
     time_to_expiry: f32,
 }
 
@@ -50,6 +50,17 @@ enum Greek{
     Rho
 }
 
+fn greek_string(greek: &Greek) -> String {
+    match greek {
+        Greek::Price => String::from("Value"),
+        Greek::Delta => String::from("Delta"),
+        Greek::Gamma => String::from("Gamma"),
+        Greek::Theta => String::from("Theta"),
+        Greek::Vega => String::from("Vega"),
+        Greek::Rho => String::from("Rho"),
+    }
+}
+
 ////////////////////////////////////
 /// Portfolio methods 
 ////////////////////////////////////
@@ -57,13 +68,11 @@ enum Greek{
 impl Portfolio {
 
     /// Summarize the properties of the underlying
-
     fn underlying_summary(&self) -> String {
         return format!("The underlying has current price {} with volatiilty {}.", self.spot, self.volatility);
     }
 
     /// Add an option to the portfolio
-
     fn add_option(&mut self, op: Opt) {
         if op.time_to_expiry > self.time_to_expiry {
             self.time_to_expiry = op.time_to_expiry;
@@ -72,11 +81,10 @@ impl Portfolio {
     }
 
     /// Summary of portfolio
-
     fn summary(&self) {
-        println!("Here is a summary of the portfolio:");
+        println!("Here is a summary of the portfolio \"{}\":",  self.name);
         println!("  {} contracts currently worth {}", self.contracts, self.spot);
-        println!("  {} in cash", self.cash);
+        //println!("  {} in cash", self.cash);
         for op in &self.options {
             let mut kind = "call".to_string();
             match op.kind {
@@ -88,8 +96,7 @@ impl Portfolio {
         }
     }
 
-    /// Greeks
-
+    /// Compute greeks
     fn greeks(&self) -> HashMap<String, f32> {
         let x = self.spot;
         let r = self.interest_rate;
@@ -142,7 +149,6 @@ impl Portfolio {
     }
 
     /// Find the three standard deviations range from the spot price
-
     fn likely_underlying_range(&self) -> [f32; 2] {
         let mut lower = 0.0;
         if self.volatility < 1.0/3.0 {
@@ -151,19 +157,28 @@ impl Portfolio {
         return [lower, self.spot*(1.0  + 3.0*self.volatility)];
     }
     
-    /// Plot price changes
-    
-    fn plot_price_changes(&self, number_samples: i32) -> Result<(), Box<dyn std::error::Error>> {
-        // add gre: Greek as an argument
+    /// Plot changes in greeks as the underlying changes
+    fn plot_over_underlying(&self, number_samples: i32, greek: Greek) -> Result<(), Box<dyn std::error::Error>> {
         let [lower, upper] = self.likely_underlying_range();
         let increment_size = (upper - lower)/(number_samples as f32);
 
         let xdata: Vec<f32> = (0..number_samples).map( |i| (lower + (i as f32)*increment_size)).collect();
         let mut ydata = vec![0f32; number_samples as usize];
 
-        for i in 0..(number_samples) {
-            ydata[i as usize] += self.contracts*(lower + (i as f32)*increment_size);
+        match greek {
+            Greek::Price => {        
+                for i in 0..(number_samples) {
+                    ydata[i as usize] += self.contracts*(lower + (i as f32)*increment_size);
+                }
+            }, 
+            Greek::Delta => {        
+                for i in 0..(number_samples) {
+                    ydata[i as usize] += self.contracts;
+                }
+            }, 
+            _ => ()
         }
+
 
         let r = self.interest_rate;
         let sigma = self.volatility;
@@ -180,17 +195,10 @@ impl Portfolio {
                 let dminus = ((x/k).ln() +  (r - sigma*sigma*0.5)*t )/(sigma*(t.sqrt()));
                 match op.kind {
                     OptKind::Call => {
-                        ydata[i as usize] += q*(x*(n.cdf(dplus as f64) as f32) - ((-r*t).exp())*k*(n.cdf(dminus as f64) as f32));
-                        // match gre {
-                        //      Greek::Price => {}, 
-                        //     Greek::Delta => {},
-                        //}
-                        // q*call_price(x,k,r,t, sigma)
-                        // q*call_delta(x,k, r,t, sigma)
-                        // q*call_gamma()
+                        ydata[i as usize] += q*compute_greek_call(x, k, t, r, sigma, dplus, dminus , n, &greek);
                     },
                     OptKind::Put => {
-                        ydata[i as usize] += q*(-x*(n.cdf(-dplus as f64) as f32) + ((-r*t).exp())*k*(n.cdf(-dminus as f64) as f32));            
+                        ydata[i as usize] += q*compute_greek_put(x, k, t, r, sigma, dplus, dminus, n, &greek);
                     },
                 }
             }
@@ -199,27 +207,39 @@ impl Portfolio {
         return plot(
             xdata,
             ydata,
-            "Portfolio value".to_string(), 
-            "plotters-doc-data/price.png".to_string(),
+            format!("Change in Portfolio {}", greek_string(&greek)), 
+            format!("plotters-doc-data/{}.png", greek_string(&greek).to_lowercase()),
             self.spot,
             format!("Price of underlying (current = {})", self.spot),
-            "Portfolio theoretical value".to_string()
+            format!("Portfolio {}" , greek_string(&greek))
         ); 
     }
     
-    // Plot delta versus underlying
-    // Plot gamma versus underlying
-    // Plot theta versus underlying
-    // Plot vega versus underlying
-    // Plot rho versus underlying
-    // Plot price versus time to expiration
-    // Plot delta versus time to expiration
-    // Plot gamma versus time to expiration
-    // Plot theta versus time to expiration
-    // Plot vega versus time to expiration
-    // Plot rho versus time to expiration
 
 }
+
+fn compute_greek_call(x: f32, k: f32, t: f32, r: f32, sigma: f32, dp: f32, dm: f32, n: Normal, gr: &Greek) -> f32 {
+    match gr {
+        Greek::Price => return x*(n.cdf(dp as f64) as f32) - ((-r*t).exp())*k*(n.cdf(dm as f64) as f32),
+        Greek::Delta => return n.cdf(dp as f64) as f32,
+        Greek::Gamma => return (n.pdf(dp as f64) as f32)/(x*sigma*t.sqrt()),
+        Greek::Theta => return -(x*sigma*(n.pdf(dp as f64) as f32))/(2.0*t.sqrt()) - r*k*((-r*t).exp())*(n.cdf(dm as f64) as f32),
+        Greek::Vega => return x*(n.pdf(dp as f64) as f32)*t.sqrt(),
+        Greek::Rho => return t*k*((-r*t).exp())*(n.cdf(dm as f64) as f32),
+    }
+}
+
+fn compute_greek_put(x: f32, k: f32, t: f32, r: f32, sigma: f32, dp: f32, dm: f32, n: Normal, gr: &Greek) -> f32 {
+    match gr {
+        Greek::Price => return -x*(n.cdf(-dp as f64) as f32) + ((-r*t).exp())*k*(n.cdf(-dm as f64) as f32),
+        Greek::Delta => return n.cdf((dp - 1.0 ) as f64) as f32,
+        Greek::Gamma => return (n.pdf(dp as f64) as f32)/(x*sigma*t.sqrt()),
+        Greek::Theta => return -(x*sigma*(n.pdf(dp as f64) as f32))/(2.0*t.sqrt()) + r*k*((-r*t).exp())*(n.cdf(-dm as f64) as f32),
+        Greek::Vega => return x*(n.pdf(dp as f64) as f32)*t.sqrt(),
+        Greek::Rho => return -t*k*((-r*t).exp())*(n.cdf(-dm as f64) as f32),
+    }
+}
+
 
 ///////////////////////////////////////
 /// Plot function
@@ -280,17 +300,17 @@ fn plot(xdata: Vec<f32>, ydata: Vec<f32>, title: String, file_path: String, curr
 fn main() {
 
     let mut portfolio1 = Portfolio {
-        spot: 99.50,
+        name: "My portfolio".to_string(),
+        spot: 97.50,
         volatility: 0.25,
         interest_rate: 0.06, 
         contracts:  7.0,
         options: Vec::new(),
-        cash: 0.0,
         time_to_expiry: 0.0,
     };
     
     portfolio1.add_option(Opt { 
-        kind: OptKind::Call, strike_price: 95.0, time_to_expiry: 91.0/365.0, quantity: -10.0 
+        kind: OptKind::Call, strike_price: 95.0, time_to_expiry: 91.0/365.0, quantity: 10.0 
     });
     portfolio1.add_option(Opt { 
         kind: OptKind::Call, strike_price: 100.0, time_to_expiry: 1.0, quantity: 3.0 
@@ -301,131 +321,18 @@ fn main() {
     portfolio1.add_option(Opt { 
         kind: OptKind::Put, strike_price: 85.0, time_to_expiry: 0.75, quantity: 2.0 
     });
-
+    
     println!("{}", portfolio1.underlying_summary());
     println!("{:?}", portfolio1.greeks());
     portfolio1.summary();
-    portfolio1.plot_price_changes(30);
+    portfolio1.plot_over_underlying(30, Greek::Price);
+    portfolio1.plot_over_underlying(30, Greek::Delta);
+    portfolio1.plot_over_underlying(30, Greek::Gamma);
+    portfolio1.plot_over_underlying(30, Greek::Theta);
+    portfolio1.plot_over_underlying(30, Greek::Vega);
+    portfolio1.plot_over_underlying(30, Greek::Rho);
 
-    plot(
-        (0..100).map(|x| x as f32).collect(), 
-        vec![5f32; 100], 
-        "Fun plot".to_string(), 
-        "plotters-doc-data/5.png".to_string(),
-        50.0,
-        "fun independent variable".to_string(),
-        "fun dependent variable".to_string()
-    );
+
 }
 
 
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////
-///////////////////////////////////////////////////////////////
-///////////////////////////////////////////////////////////////
-///////////////////////////////////////////////////////////////
-///////////////////////////////////////////////////////////////
-///////////////////////////////////////////////////////////////
-
-///// SCRAPS
-/// //////////////////////////////////////////////////////////
-///////////////////////////////////////////////////////////////
-///////////////////////////////////////////////////////////////
-/// 
-/// 
-
-fn call_price(t: f32, x: f32, k: f32, sigma: f32, r: f32) -> f64 {
-    let dplus = ((x/k).ln() +  (r + sigma*sigma*0.5)*t )/(sigma*(t.sqrt()));
-    let dminus = ((x/k).ln() +  (r - sigma*sigma*0.5)*t )/(sigma*(t.sqrt()));
-
-    let t = t as f64;
-    let x = x as f64;
-    let k = k as f64;
-    let sigma = sigma as f64;
-    let r = r as f64;
-
-    let n = Normal::new(0.0, 1.0).unwrap();
-    return x*n.cdf(dplus as f64) - ((-r*t).exp())*k*n.cdf(dminus as f64);
-}
-
-
-
-
-fn call_greeks(t: f32, x: f32, k: f32, sigma: f32, r: f32) -> HashMap<String, f64> {
-    let dplus = ((x/k).ln() +  (r + sigma*sigma*0.5)*t )/(sigma*(t.sqrt()));
-    let dminus = ((x/k).ln() +  (r - sigma*sigma*0.5)*t )/(sigma*(t.sqrt()));
-
-    let t = t as f64;
-    let x = x as f64;
-    let k = k as f64;
-    let sigma = sigma as f64;
-    let r = r as f64;
-
-    let n = Normal::new(0.0, 1.0).unwrap();
-    let price = x*n.cdf(dplus as f64) - ((-r*t).exp())*k*n.cdf(dminus as f64);
-    let delta = n.cdf(dplus as f64);
-    let gamma = n.pdf(dplus as f64)/(x*sigma*t.sqrt());
-    let theta = -(x*sigma*n.pdf(dplus as f64))/(2.0*t.sqrt()) - r*k*((-r*t).exp())*n.cdf(dminus as f64);
-    let vega = x*n.pdf(dplus as f64)*t.sqrt();
-    let rho = t*k*((-r*t).exp())*n.cdf(dminus as f64);
-
-    let mut greeks: HashMap<String, f64> = HashMap::new();
-    greeks.insert("price".to_string(), price);
-    greeks.insert("delta".to_string(), delta);
-    greeks.insert("gamma".to_string(), gamma);
-    greeks.insert("theta".to_string(), theta);
-    greeks.insert("vega".to_string(), vega);
-    greeks.insert("rho".to_string(), rho);
-    return greeks;
-}
-
-fn put_greeks(t: f32, x: f32, k: f32, sigma: f32, r: f32) -> HashMap<String, f64> {
-    let dplus = ((x/k).ln() +  (r + sigma*sigma*0.5)*t )/(sigma*(t.sqrt()));
-    let dminus = ((x/k).ln() +  (r - sigma*sigma*0.5)*t )/(sigma*(t.sqrt()));
-
-    let t = t as f64;
-    let x = x as f64;
-    let k = k as f64;
-    let sigma = sigma as f64;
-    let r = r as f64;
-
-    let n = Normal::new(0.0, 1.0).unwrap();
-    let price = -x*n.cdf(-dplus as f64) + ((-r*t).exp())*k*n.cdf(-dminus as f64);
-    let delta = n.cdf((dplus - 1.0 ) as f64);
-    let gamma = n.pdf(dplus as f64)/(x*sigma*t.sqrt());
-    let theta = -(x*sigma*n.pdf(dplus as f64))/(2.0*t.sqrt()) + r*k*((-r*t).exp())*n.cdf(-dminus as f64);
-    let vega = x*n.pdf(dplus as f64)*t.sqrt();
-    let rho = -t*k*((-r*t).exp())*n.cdf(-dminus as f64);
-
-    let mut greeks: HashMap<String, f64> = HashMap::new();
-    greeks.insert("price".to_string(), price);
-    greeks.insert("delta".to_string(), delta);
-    greeks.insert("gamma".to_string(), gamma);
-    greeks.insert("theta".to_string(), theta);
-    greeks.insert("vega".to_string(), vega);
-    greeks.insert("rho".to_string(), rho);
-    return greeks;
-}
-
-struct InterestRate {
-    rate: f32,
-    // This is the annual interest rate. 
-}
-
-impl InterestRate {
-    fn summary(&self) -> String {
-        return format!("The annual interest rate is {}.", self.rate);
-    }
-}
-
-impl Opt {
-    fn summary(&self) -> String {
-        match self.kind {
-            OptKind::Call => {
-                return format!("This is a call option with stike {} expiring in {} year(s).", self.strike_price, self.time_to_expiry)
-            },
-            OptKind::Put => {
-                return format!("This is a put option with stike {} expiring in {} year(s).", self.strike_price, self.time_to_expiry)
-            },
-        }
-    }
-}
