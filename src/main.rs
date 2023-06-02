@@ -318,7 +318,7 @@ fn main() {
 
     let mut portfolio1 = Portfolio {
         name: "My portfolio".to_string(),
-        spot: 99.50,
+        spot: 96.50,
         volatility: 0.25,
         interest_rate: 0.06, 
         contracts: 1.0,
