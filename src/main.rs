@@ -7,7 +7,7 @@ use plotters::prelude::*;
 #[allow(dead_code)]
 
 ////////////////////////////////////
-/// Structs 
+/// Set-up with enums, structs, and basic functions
 ////////////////////////////////////
 
 struct Portfolio {
@@ -16,20 +16,25 @@ struct Portfolio {
     the annual interest rate, which is assumed to be constant, 
     the number of contracts for the underlying asset,
     the options that are part of the portfolio,
-    the cash position
      */
     name: String,
     spot: f32,
     volatility: f32,
     interest_rate: f32,
     contracts: f32,
-    options: Vec<Opt>,
-    time_to_expiry: f32,
+    options: Vec<Opt>
 }
 
 enum OptKind {
     Call,
     Put,
+}
+
+fn option_string(op: &OptKind) -> String {
+    match op {
+        OptKind::Put => return String::from("put"),
+        OptKind::Call => return String::from("call")
+    }
 }
 
 struct Opt {
@@ -42,6 +47,7 @@ struct Opt {
 }
 
 enum Greek{
+    /* Different characteristics of cost function that are of interest */
     Price,
     Delta,
     Gamma, 
@@ -51,6 +57,7 @@ enum Greek{
 }
 
 fn greek_string(greek: &Greek) -> String {
+    /* Return the greek as a string */
     match greek {
         Greek::Price => String::from("Value"),
         Greek::Delta => String::from("Delta"),
@@ -67,37 +74,27 @@ fn greek_string(greek: &Greek) -> String {
 
 impl Portfolio {
 
-    /// Summarize the properties of the underlying
-    fn underlying_summary(&self) -> String {
-        return format!("The underlying has current price {} with volatiilty {}.", self.spot, self.volatility);
-    }
-
-    /// Add an option to the portfolio
+    /* Add an option to the portfolio */
     fn add_option(&mut self, op: Opt) {
-        if op.time_to_expiry > self.time_to_expiry {
-            self.time_to_expiry = op.time_to_expiry;
-        }
         self.options.push(op);
     }
 
-    /// Summary of portfolio
+    /* Summary of portfolio */
     fn summary(&self) {
+        println!("_____________________");
         println!("Here is a summary of the portfolio \"{}\":",  self.name);
         println!("  {} contracts currently worth {}", self.contracts, self.spot);
-        //println!("  {} in cash", self.cash);
         for op in &self.options {
-            let mut kind = "call".to_string();
-            match op.kind {
-                OptKind::Put => kind = "put".to_string(),
-                OptKind::Call => kind = "call".to_string()
-            }
             println!("  {} {} options with stike {} expiring in {} year(s)", 
-            op.quantity, kind, op.strike_price, op.time_to_expiry);
+            op.quantity, option_string(&op.kind), op.strike_price, op.time_to_expiry);
         }
+        println!("The underlying has volatiilty {}.", self.volatility);
+        println!("The interest rate is {}.", self.interest_rate);
+        println!("_____________________");
     }
 
-    /// Compute greeks
-    fn greeks(&self) -> HashMap<String, f32> {
+    /* Compute greeks */
+    fn greeks(&self, verbose: bool) -> HashMap<String, f32> {
         let x = self.spot;
         let r = self.interest_rate;
         let sigma = self.volatility;
@@ -111,7 +108,7 @@ impl Portfolio {
         let n = Normal::new(0.0, 1.0).unwrap();
 
         for op in &self.options {
-            let t =  op.time_to_expiry;
+            let t = op.time_to_expiry;
             let k = op.strike_price;
             let q = op.quantity;
 
@@ -130,7 +127,7 @@ impl Portfolio {
                 },
                 OptKind::Put => {
                     price += q*(-x*(n.cdf(-dplus as f64) as f32) + ((-r*t).exp())*k*(n.cdf(-dminus as f64) as f32));
-                    delta += q*(n.cdf((dplus - 1.0 ) as f64)as f32);
+                    delta += -q*(n.cdf(- dplus as f64) as f32);
                     theta += q*(-(x*sigma*(n.pdf(dplus as f64) as f32))/(2.0*t.sqrt()) + r*k*((-r*t).exp())*(n.cdf(-dminus as f64) as f32));
                     rho += -q*t*k*((-r*t).exp())*(n.cdf(-dminus as f64) as f32);                
                 },
@@ -145,10 +142,22 @@ impl Portfolio {
         greeks.insert("theta_by_day".to_string(), theta/365.0);
         greeks.insert("vega".to_string(), vega);
         greeks.insert("rho".to_string(), rho);
+        
+        if verbose {
+            println!("_____________________");
+            println!("The greeks for the portfolio \"{}\" are:", self.name);
+            println!("  PRICE = {}", price);
+            println!("  DELTA = {}", delta);
+            println!("  GAMMA = {}", gamma);
+            println!("  THETA = {}", theta);
+            println!("  VEGA  = {}", vega);
+            println!("  RHO   = {}", rho);
+            println!("_____________________");
+        }
         return greeks;
     }
 
-    /// Find the three standard deviations range from the spot price
+    /* Find the three standard deviations range from the spot price */
     fn likely_underlying_range(&self) -> [f32; 2] {
         let mut lower = 0.0;
         if self.volatility < 1.0/3.0 {
@@ -157,7 +166,7 @@ impl Portfolio {
         return [lower, self.spot*(1.0  + 3.0*self.volatility)];
     }
     
-    /// Plot changes in greeks as the underlying changes
+    /* Plot changes in greeks as the underlying changes */
     fn plot_over_underlying(&self, number_samples: i32, greek: Greek) -> Result<(), Box<dyn std::error::Error>> {
         let [lower, upper] = self.likely_underlying_range();
         let increment_size = (upper - lower)/(number_samples as f32);
@@ -166,19 +175,14 @@ impl Portfolio {
         let mut ydata = vec![0f32; number_samples as usize];
 
         match greek {
-            Greek::Price => {        
-                for i in 0..(number_samples) {
+            Greek::Price => { for i in 0..(number_samples) {
                     ydata[i as usize] += self.contracts*(lower + (i as f32)*increment_size);
-                }
-            }, 
-            Greek::Delta => {        
-                for i in 0..(number_samples) {
+                }}, 
+            Greek::Delta => { for i in 0..(number_samples) {
                     ydata[i as usize] += self.contracts;
-                }
-            }, 
+                }}, 
             _ => ()
         }
-
 
         let r = self.interest_rate;
         let sigma = self.volatility;
@@ -208,7 +212,7 @@ impl Portfolio {
             xdata,
             ydata,
             format!("Change in Portfolio {}", greek_string(&greek)), 
-            format!("plotters-doc-data/{}.png", greek_string(&greek).to_lowercase()),
+            format!("figs/{}.png", greek_string(&greek).to_lowercase()),
             self.spot,
             format!("Price of underlying (current = {})", self.spot),
             format!("Portfolio {}" , greek_string(&greek))
@@ -218,6 +222,7 @@ impl Portfolio {
 
 }
 
+/* Compute the greeks for a call */
 fn compute_greek_call(x: f32, k: f32, t: f32, r: f32, sigma: f32, dp: f32, dm: f32, n: Normal, gr: &Greek) -> f32 {
     match gr {
         Greek::Price => return x*(n.cdf(dp as f64) as f32) - ((-r*t).exp())*k*(n.cdf(dm as f64) as f32),
@@ -229,10 +234,11 @@ fn compute_greek_call(x: f32, k: f32, t: f32, r: f32, sigma: f32, dp: f32, dm: f
     }
 }
 
+/* Compute the greeks for a put */
 fn compute_greek_put(x: f32, k: f32, t: f32, r: f32, sigma: f32, dp: f32, dm: f32, n: Normal, gr: &Greek) -> f32 {
     match gr {
         Greek::Price => return -x*(n.cdf(-dp as f64) as f32) + ((-r*t).exp())*k*(n.cdf(-dm as f64) as f32),
-        Greek::Delta => return n.cdf((dp - 1.0 ) as f64) as f32,
+        Greek::Delta => return -n.cdf(-dp as f64) as f32,
         Greek::Gamma => return (n.pdf(dp as f64) as f32)/(x*sigma*t.sqrt()),
         Greek::Theta => return -(x*sigma*(n.pdf(dp as f64) as f32))/(2.0*t.sqrt()) + r*k*((-r*t).exp())*(n.cdf(-dm as f64) as f32),
         Greek::Vega => return x*(n.pdf(dp as f64) as f32)*t.sqrt(),
@@ -240,16 +246,24 @@ fn compute_greek_put(x: f32, k: f32, t: f32, r: f32, sigma: f32, dp: f32, dm: f3
     }
 }
 
-
 ///////////////////////////////////////
 /// Plot function
 ///////////////////////////////////////
 
-fn plot(xdata: Vec<f32>, ydata: Vec<f32>, title: String, file_path: String, current_price: f32, xlabel: String, ylabel: String) -> Result<(), Box<dyn std::error::Error>> {
+fn plot(
+    xdata: Vec<f32>, 
+    ydata: Vec<f32>, 
+    title: String, 
+    file_path: String, 
+    current_price: f32, 
+    xlabel: String, 
+    ylabel: String
+) -> Result<(), Box<dyn std::error::Error>> {
 
     assert_eq!(xdata.len(), ydata.len());
     let number_samples = xdata.len();
 
+    /* Find the maximum and minimum of the y-values */
     let mut ylower = ydata[0];
     let mut yupper = ydata[0];
     for i in 1..(number_samples) {
@@ -264,6 +278,7 @@ fn plot(xdata: Vec<f32>, ydata: Vec<f32>, title: String, file_path: String, curr
     yupper += range*0.2;
     ylower -= range*0.2;
 
+    /* Define the chart */
     let root = BitMapBackend::new(&file_path, (640, 480)).into_drawing_area();
     root.fill(&WHITE)?;
     let mut chart = ChartBuilder::on(&root)
@@ -280,10 +295,12 @@ fn plot(xdata: Vec<f32>, ydata: Vec<f32>, title: String, file_path: String, curr
         .x_desc(xlabel)
         .y_desc(ylabel)
         .draw()?;
-    
+
+    /* Plot ydata versus xdata */    
     chart
         .draw_series(LineSeries::new((0..(number_samples)).map(|i| (xdata[i], ydata[i])), &BLUE))?;
 
+    /* Draw a vertical line at the curret price */
     chart.draw_series(LineSeries::new(
         vec![(current_price, ylower), (current_price, yupper)],
         &BLACK,
@@ -293,7 +310,7 @@ fn plot(xdata: Vec<f32>, ydata: Vec<f32>, title: String, file_path: String, curr
     Ok(())
 }
 
-///////////////////////////////////////
+////////////////////////////////////
 /// MAIN 
 //////////////////////////////////// 
 
@@ -301,37 +318,35 @@ fn main() {
 
     let mut portfolio1 = Portfolio {
         name: "My portfolio".to_string(),
-        spot: 97.50,
+        spot: 99.50,
         volatility: 0.25,
         interest_rate: 0.06, 
-        contracts:  7.0,
+        contracts: 1.0,
         options: Vec::new(),
-        time_to_expiry: 0.0,
     };
     
     portfolio1.add_option(Opt { 
         kind: OptKind::Call, strike_price: 95.0, time_to_expiry: 91.0/365.0, quantity: 10.0 
     });
     portfolio1.add_option(Opt { 
-        kind: OptKind::Call, strike_price: 100.0, time_to_expiry: 1.0, quantity: 3.0 
+        kind: OptKind::Call, strike_price: 100.0, time_to_expiry: 1.0, quantity: -12.0 
     });
     portfolio1.add_option(Opt { 
-        kind: OptKind::Put, strike_price: 90.0, time_to_expiry: 1.0, quantity: -2.5 
+        kind: OptKind::Put, strike_price: 90.0, time_to_expiry: 91.00/365.0, quantity: 8.5 
     });
     portfolio1.add_option(Opt { 
-        kind: OptKind::Put, strike_price: 85.0, time_to_expiry: 0.75, quantity: 2.0 
+        kind: OptKind::Put, strike_price: 95.0, time_to_expiry: 0.75, quantity: -13.5 
     });
     
-    println!("{}", portfolio1.underlying_summary());
-    println!("{:?}", portfolio1.greeks());
     portfolio1.summary();
-    portfolio1.plot_over_underlying(30, Greek::Price);
-    portfolio1.plot_over_underlying(30, Greek::Delta);
-    portfolio1.plot_over_underlying(30, Greek::Gamma);
-    portfolio1.plot_over_underlying(30, Greek::Theta);
-    portfolio1.plot_over_underlying(30, Greek::Vega);
-    portfolio1.plot_over_underlying(30, Greek::Rho);
-
+    portfolio1.greeks(true);
+    
+    portfolio1.plot_over_underlying(50, Greek::Price).ok();
+    portfolio1.plot_over_underlying(50, Greek::Delta).ok();
+    portfolio1.plot_over_underlying(50, Greek::Gamma).ok();
+    portfolio1.plot_over_underlying(50, Greek::Theta).ok();
+    portfolio1.plot_over_underlying(50, Greek::Vega).ok();
+    portfolio1.plot_over_underlying(50, Greek::Rho).ok();
 
 }
 
