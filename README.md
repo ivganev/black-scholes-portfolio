@@ -14,5 +14,6 @@ The portfolio method ```.summary``` prints the content of the portfolio.
 
 The portfolio method ```.greeks``` computes the greeks of the portfolio, namely the current theoretical price, the delta, the gamma, the theta, the vega, and the rho. 
 
-Finally, the portfolio method ```.plot_over_underlying``` produces a chart of how a chosen greek changes as the price of the underlying changes within three standard deviations of the current price. 
+Finally, the portfolio method ```.plot_over_underlying``` produces a chart of how a chosen greek changes as the price of the underlying changes within three standard deviations of the current price. For example, here is the chart of the change in gamma:
 
+![alt text](https://github.com/ivganev/black-scholes-portfolio//blob/main/src/figs/gamma.png?raw=true)
